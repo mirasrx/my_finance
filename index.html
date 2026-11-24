@@ -308,17 +308,28 @@ input:focus,select:focus{border-color:var(--accent);outline:none;background:var(
 .aseg button{border:0;background:var(--soft);border-radius:999px;padding:8px 14px;font-weight:600;cursor:pointer;min-height:38px;font-size:.88rem}
 .aseg button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
 .sheet .btnrow{position:sticky;bottom:0;background:var(--surface);padding:10px 16px calc(12px + env(safe-area-inset-bottom,0px));margin:2px -16px 0;z-index:2}
-#moreOpts{display:none;align-self:flex-start;padding:6px 0}
 .sheet .err:empty{display:none}
-/* phone, typing in «Что и сколько»: only what fits above the keyboard */
+.sheet .btnrow{box-shadow:0 -10px 12px -6px var(--surface)}
+/* phone with the keyboard open: the whole sheet sits above the keyboard, denser so everything fits */
 @media (max-width:959px){
-  .sheet.typing{top:auto;border-radius:22px 22px 0 0}
-  .sheet.typing :is(#catRow,.row-ad){display:none!important}
-  .sheet.typing #moreOpts{display:block}
-  .sheet.typing .grab{display:none}
-  .sheet.typing .sheet-head{margin-bottom:6px}
-  .sheet.typing form{gap:8px}
-  .sheet.typing .btnrow{position:static;margin:0;padding:4px 0 12px}
+  .sheet.kb{padding-top:4px;border-radius:20px 20px 0 0}
+  .sheet.kb .grab{display:none}
+  .sheet.kb .sheet-head{margin-bottom:4px}
+  .sheet.kb .sheet-head h2{font-size:1rem}
+  .sheet.kb .sheet-head .del{min-height:34px;min-width:34px}
+  .sheet.kb form{gap:7px}
+  .sheet.kb .label{display:none}
+  .sheet.kb .seg button{min-height:32px;padding:5px}
+  .sheet.kb .amt{min-height:46px;font-size:1.2rem;padding:8px 12px}
+  .sheet.kb .hint{font-size:.78rem;min-height:0;margin-top:0}
+  .sheet.kb .strip{gap:4px;padding-bottom:0}
+  .sheet.kb .cbtn{width:62px;font-size:.64rem;gap:3px;padding:2px 0}
+  .sheet.kb .cbtn .ico{width:38px;height:38px;border-radius:12px}
+  .sheet.kb .cbtn .ico svg.i{width:19px;height:19px}
+  .sheet.kb .aseg button{min-height:32px;padding:5px 12px;font-size:.82rem}
+  .sheet.kb .row2 input,.sheet.kb .row2 select{min-height:40px;padding:8px 10px}
+  .sheet.kb .btnrow{padding:6px 16px 8px}
+  .sheet.kb .primary{min-height:44px;padding:10px}
 }
 .sect{display:flex;flex-direction:column;gap:6px}
 
@@ -649,7 +660,6 @@ h2.ptitle::after{content:"";flex:none;width:7px;height:7px;border-right:2px soli
       <label class="label" for="quick">Что и сколько</label>
       <input class="amt" id="quick" maxlength="120" placeholder="такси 5000" autocomplete="off" enterkeyhint="done">
       <div class="hint" id="hint" aria-live="polite">Напишите, на что и сколько. Категорию подберу сам.</div>
-      <button type="button" class="link" id="moreOpts">Категория, счёт, дата ›</button>
     </div>
     <div class="sect" id="catRow">
       <span class="label">Категория</span>
@@ -674,7 +684,7 @@ h2.ptitle::after{content:"";flex:none;width:7px;height:7px;border-right:2px soli
     <div class="row2 row-ad">
       <div class="field">
         <label class="label" for="amount">Сумма</label>
-        <input class="num" id="amount" inputmode="decimal" placeholder="0" autocomplete="off">
+        <input class="num" id="amount" inputmode="decimal" placeholder="Сумма" autocomplete="off">
       </div>
       <div class="field">
         <label class="label" for="date">Дата</label>
@@ -1205,18 +1215,16 @@ $("sheetClose").onclick=dismissSheet;
 $("sheetBack").onclick=dismissSheet;
 document.addEventListener("keydown",e=>{ if(e.key==="Escape" && sheetOpen) dismissSheet(); });
 $("fab").onclick=()=>{ if(editId){ endEdit(); render(); } openSheet($("quick")); };
-// while typing the description the sheet shows only the field and «Добавить» (keyboard takes half the screen)
-$("quick").addEventListener("focus",()=>$("entry").classList.add("typing"));
-$("quick").addEventListener("blur",()=>setTimeout(()=>{ if(document.activeElement!==$("quick")) $("entry").classList.remove("typing"); },80));
-$("moreOpts").addEventListener("pointerdown",e=>{ e.preventDefault(); $("quick").blur(); });
-$("moreOpts").onclick=()=>$("quick").blur();
-// «Добавить» and Расход/Доход/Перевод keep the keyboard open, so the layout does not jump under the finger
-["save","tOut","tIn","tTr"].forEach(id=>$(id).addEventListener("pointerdown",e=>{ if(document.activeElement===$("quick")) e.preventDefault(); }));
+// taps on buttons inside the sheet keep the keyboard open, so the sheet does not jump under the finger
+$("entry").addEventListener("pointerdown",e=>{
+  const a=document.activeElement;
+  if(e.target.closest("button") && a && a.tagName==="INPUT" && $("entry").contains(a) && !e.target.closest("#sheetClose")) e.preventDefault();
+});
 $("acctSeg").addEventListener("click",e=>{ const b=e.target.closest("button[data-a]"); if(!b) return; $("acct").value=b.dataset.a; syncPickers(); });
 // keep the sheet above the on-screen keyboard
 if(window.visualViewport){
   const vv=window.visualViewport;
-  const upd=()=>{ const kb=Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)); const st=document.documentElement.style; st.setProperty("--kb", kb+"px"); st.setProperty("--vvh", Math.round(vv.height)+"px"); };
+  const upd=()=>{ const kb=Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)); const st=document.documentElement.style; st.setProperty("--kb", kb+"px"); st.setProperty("--vvh", Math.round(vv.height)+"px"); $("entry").classList.toggle("kb", kb>120); };
   vv.addEventListener("resize",upd); vv.addEventListener("scroll",upd); upd();
 }
 
