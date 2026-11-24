@@ -204,6 +204,10 @@ h2.ptitle::after{content:"";flex:none;width:7px;height:7px;border-right:2px soli
 .auth-card{width:100%;max-width:380px;display:flex;flex-direction:column;gap:12px}
 .auth-card h1{margin-bottom:2px}
 .auth-card .link{align-self:center;font-size:.9rem}
+.msub{display:block;font-size:.72rem;font-weight:500;color:var(--muted);text-transform:none}
+.close-box{display:flex;flex-direction:column;gap:10px;border-color:var(--accent)}
+.close-box h2,.close-box p{margin:0}
+@media (max-width:820px){#closeBox{order:0}}
 .foot-actions{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
 .foot-actions .link{font-size:.85rem}
 </style>
@@ -227,6 +231,7 @@ h2.ptitle::after{content:"";flex:none;width:7px;height:7px;border-right:2px soli
       <div class="status" id="status">Подключаю хранилище…</div>
     </div>
     <div class="hctl">
+      <button type="button" class="pbtn" id="closeBtn" hidden>Закрыть месяц</button>
       <button type="button" class="pbtn" id="privBtn" aria-pressed="false">Скрыть</button>
       <div class="monthnav">
         <button class="ibtn" id="prev" aria-label="Предыдущий месяц">‹</button>
@@ -244,6 +249,19 @@ h2.ptitle::after{content:"";flex:none;width:7px;height:7px;border-right:2px soli
   <div class="banner" id="banner" role="status" hidden></div>
 
   <div class="view" id="viewMain">
+  <div class="panel close-box" id="closeBox" hidden>
+    <h2 id="closeTitle">Закрыть месяц</h2>
+    <p class="status" id="closeText"></p>
+    <div class="ana-row">
+      <div class="field"><label class="label" for="closeDate" id="closeLabel">Новый месяц начинается с</label><input type="date" id="closeDate"></div>
+    </div>
+    <p class="err" id="closeErr" role="alert"></p>
+    <div class="btnrow">
+      <button class="primary" type="button" id="closeOk">Начать</button>
+      <button class="link" type="button" id="closeReset" hidden>Вернуть с 1-го числа</button>
+      <button class="link" type="button" id="closeCancel">Отмена</button>
+    </div>
+  </div>
   <section class="summary" aria-label="Итоги месяца">
     <div><span class="label">Доходы</span><span class="v in num" id="sIn">0</span></div>
     <div><span class="label">Расходы</span><span class="v out num" id="sOut">0</span></div>
@@ -469,12 +487,33 @@ let cur = ls.get("fin.cur","KZT");
 const now = new Date();
 let ym = [now.getFullYear(), now.getMonth()];
 let store = null;
+let userId = null;        // signed-in Supabase user
 let pendingDel = null;
 
 const pad = n => String(n).padStart(2,"0");
 const today = () => { const d=new Date(); return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()); };
 const fmt = n => { try { return new Intl.NumberFormat("ru-RU",{style:"currency",currency:cur,maximumFractionDigits:2}).format(n); } catch(e){ return n.toFixed(2); } };
 const monthKey = () => ym[0]+"-"+pad(ym[1]+1);
+
+// ---------- Reporting months ----------
+// A month ("2026-12") normally runs from the 1st to its last day. Closing a month moves the start
+// of the next one earlier, e.g. December from 28 Nov (salary day), so the salary and the spending
+// it pays for land in the same month. Stored per month: {"2026-12":"2026-11-28"}.
+let periodStarts={};
+const keyAdd=(k,n)=>{ const d=new Date(+k.slice(0,4), +k.slice(5,7)-1+n, 1); return d.getFullYear()+"-"+pad(d.getMonth()+1); };
+const isoDay=d=>d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate());
+const pStart=k=>periodStarts[k] || (k+"-01");
+const pEnd=k=>{ const d=new Date(pStart(keyAdd(k,1))+"T00:00:00"); d.setDate(d.getDate()-1); return isoDay(d); };
+function periodOf(date){
+  const k=date.slice(0,7);
+  if(date>=pStart(keyAdd(k,1))) return keyAdd(k,1);
+  if(date<pStart(k)) return keyAdd(k,-1);
+  return k;
+}
+const setYm=k=>{ ym=[+k.slice(0,4), +k.slice(5,7)-1]; };
+const monthOnly=k=>new Date(+k.slice(0,4), +k.slice(5,7)-1, 1).toLocaleDateString("ru-RU",{month:"long"});
+const monthFull=k=>new Date(+k.slice(0,4), +k.slice(5,7)-1, 1).toLocaleDateString("ru-RU",{month:"long",year:"numeric"});
+const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
 
 function fillCats(){
   const sel=$("cat"); sel.textContent="";
@@ -556,9 +595,11 @@ function renderAccts(){
 
 function render(){
   const mk=monthKey();
-  const d=new Date(ym[0],ym[1],1);
-  $("month").textContent=d.toLocaleDateString("ru-RU",{month:"long",year:"numeric"});
-  const inMonth=txs.filter(t=>t.date && t.date.slice(0,7)===mk);
+  const mEl=$("month"); mEl.textContent=monthFull(mk);
+  const shifted=pStart(mk)!==mk+"-01" || pEnd(mk)!==isoDay(new Date(ym[0],ym[1]+1,0));
+  if(shifted){ const s=document.createElement("small"); s.className="msub"; s.textContent=fmtShort(pStart(mk))+" – "+fmtShort(pEnd(mk)); mEl.appendChild(s); }
+  renderCloseBtn(mk);
+  const inMonth=txs.filter(t=>t.date && periodOf(t.date)===mk);
   let sin=0,sout=0; inMonth.forEach(t=>{ if(t.type==="in") sin+=t.amount; else if(isSpend(t)) sout+=t.amount; });
   $("sIn").textContent=fmt(sin); $("sOut").textContent=fmt(sout);
   const sp=savedParts(inMonth);
@@ -766,7 +807,7 @@ $("form").addEventListener("submit", async e=>{
       await store.update(editId, tx);
       endEdit();
       hint("Сохранено", (tx.type==="transfer" ? "Перевод" : tx.category)+" · "+fmt(tx.amount));
-      const [y,m]=date.split("-").map(Number); ym=[y,m-1]; render();
+      setYm(periodOf(date)); render();
       return;
     }
     await store.add(tx);
@@ -774,7 +815,8 @@ $("form").addEventListener("submit", async e=>{
     $("quick").value=""; $("amount").value=""; $("acct").value="main"; if(type==="tr") setType("out"); manualCat=false; stopAI();
     hint("Добавлено", (tx.type==="transfer" ? "Перевод" : tx.category)+" · "+fmt(tx.amount)+(tx.account && tx.account!=="main" ? " · "+ACC[tx.account] : ""));
     $("quick").focus();
-    const [y,m]=date.split("-").map(Number); ym=[y,m-1]; render();
+    setYm(periodOf(date)); render();
+    suggestClose(tx);
   }catch(err){
     $("err").textContent = err && err.code==="quota_exceeded" ? "Хранилище заполнено. Удалите старые записи." : "Не удалось сохранить. Проверьте соединение и попробуйте ещё раз.";
   }finally{ $("save").disabled=false; }
@@ -811,9 +853,7 @@ $("cancelEdit").onclick=()=>{ endEdit(); render(); };
 
 // ---------- Regular payments ----------
 let recs=ls.get("fin.rec",[]), recsLoaded=false, recBusy=false, recDel=null;
-const monthNow=()=>today().slice(0,7);
-const lastDay=()=>{ const t=new Date(); return new Date(t.getFullYear(), t.getMonth()+1, 0).getDate(); };
-const dueDay=r=>Math.min(r.day, lastDay());
+const monthNow=()=>periodOf(today());
 function fillRecCats(){
   const sel=$("recCat"), t=$("recType").value; sel.textContent="";
   CATS[t].forEach(c=>{ const o=document.createElement("option"); o.value=o.textContent=c; sel.appendChild(o); });
@@ -834,10 +874,10 @@ const isRecTx=t=>recs.some(r=>recMatch(r,t));
 function recStatus(r){
   const m=txs.filter(t=>t.date && recMatch(r,t)).sort((a,b)=>b.date.localeCompare(a.date));
   const last=m[0]||null, mkey=monthNow();
-  return {last, paid:m.some(t=>t.date.slice(0,7)===mkey), next:last?addDays(last.date, r.every||30):null, expected:r.amount||(last?last.amount:0)};
+  return {last, paid:m.some(t=>periodOf(t.date)===mkey), next:last?addDays(last.date, r.every||30):null, expected:r.amount||(last?last.amount:0)};
 }
 function recUpcoming(){
-  const end=monthNow()+"-"+pad(lastDay());
+  const end=pEnd(monthNow());
   return recs.map(r=>({r, s:recStatus(r)})).filter(x=>!x.s.paid && (!x.s.next || x.s.next<=end));
 }
 function payRec(r, expected){
@@ -940,7 +980,7 @@ function renderForecast(inMonth, sout, bal){
   const el=$("forecast");
   if(monthKey()!==monthNow()){ el.hidden=true; return; }
   el.hidden=false;
-  const mkey=monthNow(), dnow=new Date().getDate(), left=lastDay()-dnow;
+  const left=Math.max(0, spanDays(today(), pEnd(monthNow()))-1);
   // Повседневный темп: последние 30 дней (а не только этот месяц), без разовых категорий,
   // без регулярных платежей и без крупных выбросов — их нельзя «размазывать» на будущие дни.
   const td=today(), wStart=addDays(td,-29);
@@ -1018,12 +1058,14 @@ const AF={all:null, daily:["main","kaspi"], main:["main"], kaspi:["kaspi"], extr
 const STOP=new Set("для на за по от из под над при без или это как что все the and for оплата покупка платеж перевод счет".split(" "));
 
 function periodRange(){
-  const t=new Date(), y=t.getFullYear(), m=t.getMonth();
+  // months here are reporting months, so a closed month's salary counts where it belongs
+  const ck=monthNow(), y=+ck.slice(0,4);
+  const span=(lastK,n)=>[pStart(keyAdd(lastK,-(n-1))), pEnd(lastK)];
   const P={month:[1,0,"прошлым месяцем"], prev:[1,1,"позапрошлым месяцем"], "3m":[3,0,"предыдущими 3 месяцами"], "6m":[6,0,"предыдущими 6 месяцами"]};
-  if(P[period]){ const [n,back,label]=P[period]; const [s,e]=mRange(y,m-back,n); const [ps,pe]=mRange(y,m-back-n,n); return {s,e,ps,pe,label}; }
-  if(period==="year") return {s:y+"-01-01", e:y+"-12-31", ps:(y-1)+"-01-01", pe:(y-1)+"-12-31", label:"прошлым годом"};
+  if(P[period]){ const [n,back,label]=P[period]; const [s,e]=span(keyAdd(ck,-back),n); const [ps,pe]=span(keyAdd(ck,-back-n),n); return {s,e,ps,pe,label}; }
+  if(period==="year") return {s:pStart(y+"-01"), e:pEnd(y+"-12"), ps:pStart((y-1)+"-01"), pe:pEnd((y-1)+"-12"), label:"прошлым годом"};
   let s=$("aFrom").value, e=$("aTo").value;
-  if(!s||!e) [s,e]=mRange(y,m,1);
+  if(!s||!e) [s,e]=span(ck,1);
   if(s>e){ const x=s; s=e; e=x; }
   const len=spanDays(s,e);
   return {s,e,ps:addDays(s,-len),pe:addDays(s,-1),label:"предыдущими "+plural(len,"днём","днями","днями")};
@@ -1060,11 +1102,10 @@ function renderChart(r,outs){
     box.appendChild(e); return;
   }
   const wk=s=>{ const d=dOf(s); d.setDate(d.getDate()-((d.getDay()+6)%7)); return iso(d); };
-  const keyOf=s=>unit==="day"?s: unit==="week"?wk(s): s.slice(0,7);
+  const keyOf=s=>unit==="day"?s: unit==="week"?wk(s): periodOf(s);
   const keys=[];
   if(unit==="month"){
-    const d=new Date(+r.s.slice(0,4), +r.s.slice(5,7)-1, 1), end=r.e.slice(0,7);
-    for(let k=iso(d).slice(0,7); k<=end; d.setMonth(d.getMonth()+1), k=iso(d).slice(0,7)) keys.push(k);
+    for(let k=periodOf(r.s), end=periodOf(r.e); k<=end; k=keyAdd(k,1)) keys.push(k);
   } else {
     for(let k=keyOf(r.s); k<=r.e; k=addDays(k, unit==="day"?1:7)) keys.push(k);
   }
@@ -1269,7 +1310,6 @@ if(location.hash==="#analytics") setView("ana",true);
 const SUPA_URL="https://oyontpudgfpokavlqbpe.supabase.co";
 const SUPA_KEY="sb_publishable_hDBsrmGAnrBHh7YAUPnU3g_AWVwu3uC";
 const sb=window.supabase.createClient(SUPA_URL, SUPA_KEY, {auth:{persistSession:true, autoRefreshToken:true, detectSessionInUrl:true}});
-let userId=null;
 
 const fromRow=r=>{
   const t={id:r.id, type:r.type, amount:Number(r.amount), category:r.category||"", date:r.date, note:r.note||"", createdAt:Date.parse(r.created_at)||0};
@@ -1292,14 +1332,92 @@ async function sbLoad(){
   txs=data.map(fromRow);
   opening=normOpening(st.data && st.data.opening);
   recs=st.data && Array.isArray(st.data.recurring) ? st.data.recurring : [];
+  const ps=st.data && st.data.period_starts;
+  periodStarts=ps && typeof ps==="object" && !Array.isArray(ps) ? Object.assign({},ps) : {};
+  if(st.data) periodCol="period_starts" in st.data;
+  if(!loadedOnce){ loadedOnce=true; setYm(monthNow()); }   // open on the current reporting month
   $("status").textContent="Личные записи, видны только вам";
   render();
 }
+let loadedOnce=false;
+let periodCol=null;   // does the settings table have the period_starts column yet (null = not known)
 async function saveSettings(patch){
-  const row=Object.assign({user_id:userId, opening, recurring:recs, updated_at:new Date().toISOString()}, patch);
-  const {error}=await sb.from("settings").upsert(row);
+  const row=Object.assign({user_id:userId, opening, recurring:recs, updated_at:new Date().toISOString()}, periodCol!==false ? {period_starts:periodStarts} : {}, patch);
+  let {error}=await sb.from("settings").upsert(row);
+  if(error && /period_starts/.test(error.message||"")){
+    // the column has not been added in Supabase yet: keep everything else working
+    periodCol=false;
+    const wanted="period_starts" in patch;
+    delete row.period_starts;
+    if(wanted){ const e=new Error("period_starts column missing"); e.code="nocol"; throw e; }
+    ({error}=await sb.from("settings").upsert(row));
+  }
   if(error) throw error;
+  if("period_starts" in row) periodCol=true;
 }
+
+// ---------- Closing a month ----------
+let closeTarget=null;
+function renderCloseBtn(mk){
+  const btn=$("closeBtn");
+  const next=keyAdd(mk,1);
+  if(view!=="main" || !userId){ btn.hidden=true; return; }
+  if(periodStarts[mk]){ btn.hidden=false; btn.textContent="Начало месяца"; btn.onclick=()=>openClose(mk); }
+  else if(mk===monthNow() && !periodStarts[next]){ btn.hidden=false; btn.textContent="Закрыть "+monthOnly(mk); btn.onclick=()=>openClose(next); }
+  else btn.hidden=true;
+}
+function openClose(k){
+  closeTarget=k;
+  const prevK=keyAdd(k,-1), min=prevK+"-15", max=k+"-10";
+  const salary=txs.filter(t=>t.type==="in" && t.category==="Зарплата" && t.date>=min && t.date<=k+"-01").map(t=>t.date).sort().pop();
+  const td=today();
+  $("closeTitle").textContent = periodStarts[k] ? "Начало: "+monthFull(k) : "Закрыть "+monthOnly(prevK);
+  $("closeText").textContent="С выбранного дня все записи (зарплата, траты, переводы) считаются за "+monthOnly(k)+", а "+monthOnly(prevK)+" заканчивается накануне. Удобно закрывать месяц в день зарплаты.";
+  $("closeLabel").textContent=cap(monthOnly(k))+" начинается с";
+  const di=$("closeDate"); di.min=min; di.max=max;
+  di.value = periodStarts[k] || salary || (td>=min && td<=max ? td : k+"-01");
+  $("closeOk").textContent = periodStarts[k] ? "Сохранить" : "Начать "+monthOnly(k);
+  $("closeReset").hidden=!periodStarts[k];
+  $("closeErr").textContent="";
+  $("closeBox").hidden=false;
+  try{ $("closeBox").scrollIntoView({behavior:"smooth",block:"center"}); }catch(e){}
+}
+async function startPeriod(k, date){
+  if(date===k+"-01") return resetPeriod(k);
+  const next=Object.assign({},periodStarts,{[k]:date});
+  try{ await saveSettings({period_starts:next}); }
+  catch(e){ showCloseError(e); return; }
+  periodStarts=next; $("closeBox").hidden=true;
+  setYm(periodOf(today())>=k ? k : periodOf(today())); render();
+  banner(cap(monthOnly(k))+" начинается с "+fmtShort(date)+": записи с этого дня считаются за "+monthOnly(k)+".", ()=>resetPeriod(k), false, "Отменить");
+}
+async function resetPeriod(k){
+  const next=Object.assign({},periodStarts); delete next[k];
+  try{ await saveSettings({period_starts:next}); }
+  catch(e){ showCloseError(e); return; }
+  periodStarts=next; $("closeBox").hidden=true; render();
+  banner(cap(monthOnly(k))+" снова начинается с 1-го числа.");
+}
+function showCloseError(e){
+  const msg = e && e.code==="nocol"
+    ? "Сначала один раз добавьте поле в базу: Supabase → SQL Editor → выполните код из инструкции. После этого закрытие месяца заработает."
+    : "Не удалось сохранить. Проверьте интернет и попробуйте ещё раз.";
+  if(!$("closeBox").hidden) $("closeErr").textContent=msg; else banner(msg, null, true);
+}
+// salary in the last days of a month: offer to start the next month from that day
+function suggestClose(tx){
+  if(tx.type!=="in" || tx.category!=="Зарплата" || +tx.date.slice(8)<20) return;
+  const k=keyAdd(tx.date.slice(0,7),1);
+  if(periodStarts[k]) return;
+  banner("Зарплата пришла "+fmtShort(tx.date)+". Считать её и траты с этого дня за "+monthOnly(k)+"?", ()=>startPeriod(k, tx.date), false, "Да, закрыть "+monthOnly(keyAdd(k,-1)));
+}
+$("closeOk").onclick=()=>{
+  const k=closeTarget, v=$("closeDate").value, di=$("closeDate");
+  if(!v || v<di.min || v>di.max){ $("closeErr").textContent="Выберите дату с "+fmtShort(di.min)+" по "+fmtShort(di.max)+"."; return; }
+  startPeriod(k, v);
+};
+$("closeReset").onclick=()=>resetPeriod(closeTarget);
+$("closeCancel").onclick=()=>{ $("closeBox").hidden=true; };
 const sbStore={
   async add(tx){ const {data,error}=await sb.from("transactions").insert(toRow(tx)).select().single(); if(error) throw error; const t=fromRow(data); txs.push(t); render(); return {id:t.id}; },
   async remove(id){ const {error}=await sb.from("transactions").delete().eq("id",id); if(error) throw error; txs=txs.filter(t=>t.id!==id); render(); },
@@ -1338,6 +1456,7 @@ $("authForm").addEventListener("submit", async e=>{
       : /not confirmed/i.test(m) ? "Почта ещё не подтверждена: откройте письмо от Supabase и нажмите ссылку."
       : /already registered|already exists/i.test(m) ? "Такой аккаунт уже есть. Нажмите «Уже есть аккаунт? Войти»."
       : /signups? not allowed/i.test(m) ? "Создание новых аккаунтов отключено."
+      : /security purposes|rate limit|too many/i.test(m) ? "Слишком часто. Подождите минуту и попробуйте снова."
       : "Не получилось: "+m;
   }finally{ $("authBtn").disabled=false; }
 });
@@ -1358,7 +1477,7 @@ document.addEventListener("visibilitychange", ()=>{ if(!document.hidden && userI
 
 // backup: download / restore
 $("exportBtn").onclick=()=>{
-  const data={app:"moy-budget", version:1, exported:new Date().toISOString(), currency:cur, opening, recurring:recs, txs};
+  const data={app:"moy-budget", version:1, exported:new Date().toISOString(), currency:cur, opening, recurring:recs, periodStarts, txs};
   const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="moy-budget-"+today()+".json";
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),2000);
@@ -1374,6 +1493,7 @@ $("importFile").onchange=async e=>{
     banner("Загружаю "+plural(rows.length,"запись","записи","записей")+"…");
     for(let i=0;i<rows.length;i+=500){ const {error}=await sb.from("transactions").upsert(rows.slice(i,i+500)); if(error) throw error; }
     const nextOpen=d.opening ? normOpening(d.opening) : opening, nextRec=Array.isArray(d.recurring) ? d.recurring : recs;
+    if(d.periodStarts && typeof d.periodStarts==="object") periodStarts=Object.assign({}, d.periodStarts);
     await saveSettings({opening:nextOpen, recurring:nextRec});
     await sbLoad();
     banner("Готово: загружено "+plural(rows.length,"запись","записи","записей")+". Повторная загрузка того же файла дублей не создаст.");
@@ -1394,10 +1514,10 @@ function decodeQ(h){
   }
   try{ return new TextDecoder("utf-8").decode(new Uint8Array(bytes)).replace(/\s+/g," ").trim(); }catch(e){ return null; }
 }
-function banner(text, undo, bad){
+function banner(text, undo, bad, label){
   const b=$("banner"); b.textContent=""; b.hidden=false; b.className="banner"+(bad?" bad":"");
   const s=document.createElement("span"); s.textContent=text; b.appendChild(s);
-  if(undo){ const u=document.createElement("button"); u.type="button"; u.className="link"; u.textContent="Отменить"; u.onclick=undo; b.appendChild(u); }
+  if(undo){ const u=document.createElement("button"); u.type="button"; u.className="link"; u.textContent=label||"Отменить"; u.onclick=undo; b.appendChild(u); }
 }
 const ACCT_WORDS=[["kaspi",/(^|\s)(каспи|kaspi)(?=\s|$)/ig],["extra",/(^|\s)(доп\.?\s?сч[её]т|допсч[её]т|доп\.?)(?=\s|$)/ig]];
 async function quickAdd(text){
@@ -1425,7 +1545,8 @@ async function quickAdd(text){
     banner("Записано: "+tx.category+" "+sign+fmt(amount)+(account!=="main"?" · "+ACC[account]:"")+(desc?" ("+desc+")":""), async ()=>{
       try{ await store.remove(id); banner("Запись удалена."); }catch(e){ banner("Не удалось удалить. Удалите запись в списке ниже.", null, true); }
     });
-    const [y,m]=tx.date.split("-").map(Number); ym=[y,m-1]; render();
+    setYm(periodOf(tx.date)); render();
+    suggestClose(tx);
   }catch(e){
     banner("Не удалось сохранить «"+text+"». Проверьте интернет и добавьте вручную ниже.", null, true);
     $("quick").value=text;
